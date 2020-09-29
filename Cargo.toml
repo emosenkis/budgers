@@ -1,0 +1,11 @@
+[package]
+name = "budgers"
+version = "0.1.0"
+authors = ["Eitan Mosenkis <eitan@mosenkis.net>"]
+edition = "2018"
+
+[dependencies]
+strum = "0.19.2"
+strum_macros = "0.19.2"
+bevy = "0.2.1"
+shrinkwraprs = "0.3.0"

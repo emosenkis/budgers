@@ -1,14 +1,15 @@
 use self::FluffyDir::*;
 use self::Tile::*;
+use bevy::app::DefaultTaskPoolOptions;
 use bevy::asset::{HandleId, LoadState};
+use bevy::input::{keyboard::KeyCode, Input};
 use bevy::prelude::*;
 use bevy::sprite::TextureAtlasBuilder;
-use bevy::input::{keyboard::KeyCode, Input};
+use shrinkwraprs::Shrinkwrap;
 use std::io::{BufRead, BufReader};
 use std::ops::{Add, AddAssign};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
-use shrinkwraprs::Shrinkwrap;
 
 const TILE_SIZE: u32 = 24;
 const TILES_X: u32 = 20;
@@ -33,11 +34,11 @@ impl Coords {
 impl From<&Coords> for Vec3 {
     fn from(coords: &Coords) -> Self {
         Self::new(
-            (coords.0 as u32 * TILE_SIZE) as f32 - (TILES_X * TILE_SIZE) as f32 / 2.
-            + TILE_SIZE as f32 / 2.,
-            (TILES_Y * TILE_SIZE) as f32 / 2.
-            - (coords.1 as u32 * TILE_SIZE) as f32
-            - TILE_SIZE as f32 / 2.,
+            (coords.0 as u32 * TILE_SIZE) as f32 - (TILES_X * TILE_SIZE) as f32 / 2.0
+                + TILE_SIZE as f32 / 2.0,
+            (TILES_Y * TILE_SIZE) as f32 / 2.0
+                - (coords.1 as u32 * TILE_SIZE) as f32
+                - TILE_SIZE as f32 / 2.0,
             0.0,
         )
     }
@@ -83,7 +84,7 @@ impl From<FluffyDir> for Coords {
 enum Change {
     Move(Coords, Coords),
     Remove(Coords),
-    Add(Tile, Coords)
+    Add(Tile, Coords),
 }
 
 type Changes = Vec<Change>;
@@ -97,19 +98,21 @@ fn main() {
             title: "Budge".into(),
             ..Default::default()
         })
-    .add_resource(ClearColor(Color::rgb(1., 1., 1.)))
-        .add_resource(Board::default())
-        .add_resource(EntityBoard::default())
-        .add_resource(PlayerCoords::default())
-        .add_resource(SpikyCoords::default())
-        .add_resource(FluffyCoords::default())
-        .add_resource(Status::default())
-        .add_resource(FluffyDir::default())
-        .add_resource(Changes::new())
+        .add_resource(DefaultTaskPoolOptions::with_num_threads(1))
+        .add_resource(ClearColor(Color::WHITE))
+        .init_resource::<Board>()
+        .init_resource::<EntityBoard>()
+        .init_resource::<PlayerCoords>()
+        .init_resource::<SpikyCoords>()
+        .init_resource::<FluffyCoords>()
+        .init_resource::<Status>()
+        .init_resource::<FluffyDir>()
+        .init_resource::<Changes>()
         .add_default_plugins()
         .add_resource(TickTimer(Timer::from_seconds(0.25, true)))
         .add_resource(Status::Win(0))
-        .add_resource(LevelNum(0))
+        .init_resource::<LevelNum>()
+        .init_resource::<Lives>()
         .init_resource::<SpriteHandles>()
         .add_startup_system(setup.system())
         .add_system(load_atlas.system())
@@ -118,6 +121,7 @@ fn main() {
         .add_system(move_tiles.system())
         .add_system(start_level.system())
         .add_system(user_input.system())
+        .add_system(reduce_timers.system())
         .run();
 }
 
@@ -209,18 +213,18 @@ impl Tile {
 
     fn sprite(&self) -> Option<String> {
         Some(format!(
-                "sprites/{}.png",
-                match *self {
-                    Empty | Invisible => {
-                        return None;
-                    }
-                    Block(neighbors) => neighbors.sprite(),
-                    other => {
-                        let mut name = format!("{:?}", other);
-                        name.make_ascii_lowercase();
-                        name
-                    }
+            "sprites/{}.png",
+            match *self {
+                Empty | Invisible => {
+                    return None;
                 }
+                Block(neighbors) => neighbors.sprite(),
+                other => {
+                    let mut name = format!("{:?}", other);
+                    name.make_ascii_lowercase();
+                    name
+                }
+            }
         ))
     }
 
@@ -330,7 +334,7 @@ fn load_atlas(
         return;
     }
     let mut texture_atlas_builder =
-        TextureAtlasBuilder::new(Vec2::new(144., 144.), Vec2::new(144., 144.));
+        TextureAtlasBuilder::new(Vec2::new(144.0, 144.0), Vec2::new(144.0, 144.0));
     if let Some(LoadState::Loaded(_)) = asset_server.get_group_load_state(&sprite_handles.handles) {
         for texture_id in sprite_handles.handles.iter() {
             let handle = Handle::from_id(*texture_id);
@@ -354,19 +358,39 @@ fn load_atlas(
 }
 
 fn start_level(
-    mut cur_level: ResMut<LevelNum>,
-    mut status: ResMut<Status>,
+    mut commands: Commands,
+    llsf: (
+        ResMut<LevelNum>,
+        Res<Lives>,
+        ResMut<Status>,
+        ResMut<FluffyDir>,
+    ),
     mut window: ResMut<Windows>,
     mut board: ResMut<Board>,
+    mut entity_board: ResMut<EntityBoard>,
     mut changes: ResMut<Changes>,
     mut player_coords: ResMut<PlayerCoords>,
     mut spiky_coords: ResMut<SpikyCoords>,
     mut fluffy_coords: ResMut<FluffyCoords>,
     sprite_handles: Res<SpriteHandles>,
 ) {
-    if *status != Status::Win(0) || !sprite_handles.atlas_loaded {
+    if !sprite_handles.atlas_loaded {
         return;
     }
+    let (mut cur_level, lives, mut status, mut fluffy_dir) = llsf;
+    match *status {
+        Status::Win(0) => {}
+        Status::Dead(0) => {
+            if lives.0 == 0 {
+                return;
+            }
+            cur_level.0 -= 1;
+        }
+        _ => {
+            return;
+        }
+    }
+    *fluffy_dir = Default::default();
     let data_reader = BufReader::new(LEVELS);
     let name = data_reader
         .lines()
@@ -377,6 +401,15 @@ fn start_level(
     let window_id = window.get_primary().unwrap().id;
     window.get_mut(window_id).unwrap().title = name; // TODO: Fix this so it actually works
     let data_reader = BufReader::new(LEVELS);
+    *board = Default::default();
+    for entity in entity_board
+        .iter()
+        .flat_map(|r| r.iter())
+        .filter_map(|&e| e)
+    {
+        commands.despawn(entity);
+    }
+    *entity_board = Default::default();
     let rows = data_reader
         .lines()
         .skip(((TILES_Y + 1) * cur_level.0 as u32) as usize + 1);
@@ -386,9 +419,9 @@ fn start_level(
             board[x][y] = tile;
             if let Some(dst) = match tile {
                 Player => Some(&mut player_coords.0),
-                    Spiky => Some(&mut spiky_coords.0),
-                    Fluffy => Some(&mut fluffy_coords.0),
-                    _ => None,
+                Spiky => Some(&mut spiky_coords.0),
+                Fluffy => Some(&mut fluffy_coords.0),
+                _ => None,
             } {
                 *dst = Coords(x as i8, y as i8);
             }
@@ -416,24 +449,54 @@ fn start_level(
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Status {
+    Welcome,
     Win(u8),
     Play,
     Pause,
-    Dead,
+    Dead(u8),
 }
 
 impl Default for Status {
     fn default() -> Self {
-        Self::Play
+        Self::Welcome
     }
 }
 
+#[derive(Shrinkwrap)]
 struct TickTimer(Timer);
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Default, Shrinkwrap)]
 struct LevelNum(u8);
+#[derive(Copy, Clone, Shrinkwrap)]
+struct Lives(u8);
+
+impl Default for Lives {
+    fn default() -> Self {
+        Lives(3)
+    }
+}
 
 fn time_system(time: Res<Time>, mut timer: ResMut<TickTimer>) {
     timer.0.tick(time.delta_seconds);
+}
+
+fn reduce_timers(tick: Res<TickTimer>, mut status: ResMut<Status>, lives: Res<Lives>) {
+    if !tick.finished {
+        return;
+    }
+    match *status {
+        Status::Win(ref mut n) => {
+            *n -= 1;
+        }
+        Status::Dead(0) => {
+            if lives.0 == 0 {
+                *status = Status::Welcome;
+            }
+        }
+        Status::Dead(ref mut n) => {
+            *n -= 1;
+        }
+        _ => {}
+    }
 }
 
 fn move_monsters(
@@ -444,36 +507,83 @@ fn move_monsters(
     player_coords: Res<PlayerCoords>,
     mut fluffy_dir: ResMut<FluffyDir>,
     mut changes: ResMut<Changes>,
-    status: Res<Status>,
+    mut status: ResMut<Status>,
+    mut lives: ResMut<Lives>,
 ) {
     if !tick.0.finished || *status != Status::Play {
         return;
     }
     let fluffy_target = **fluffy_coords + *fluffy_dir;
-    let is_empty = fluffy_target.is_valid()
-        && board[fluffy_target.x()][fluffy_target.y()] == Empty;
-    if is_empty {
-        changes.push(Change::Move(fluffy_coords.0, fluffy_target));
-        board[fluffy_coords.x()][fluffy_coords.y()] = Empty;
-        fluffy_coords.0 = fluffy_target;
-        board[fluffy_target.x()][fluffy_target.y()] = Fluffy;
+    match if fluffy_target.is_valid() {
+        board[fluffy_target.x()][fluffy_target.y()]
     } else {
-        *fluffy_dir = fluffy_dir.next();
+        Invisible
+    } {
+        Spiky => {
+            *status = Status::Win(6);
+            changes.push(Change::Remove(**spiky_coords));
+            changes.push(Change::Remove(**fluffy_coords));
+            changes.push(Change::Add(Heart, fluffy_target));
+            return;
+        }
+        Player => {
+            *status = Status::Dead(6);
+            changes.push(Change::Remove(**player_coords));
+            changes.push(Change::Add(Dead, **player_coords));
+            lives.0 -= 1;
+            return;
+        }
+        Empty => {
+            changes.push(Change::Move(fluffy_coords.0, fluffy_target));
+            board[fluffy_coords.x()][fluffy_coords.y()] = Empty;
+            fluffy_coords.0 = fluffy_target;
+            board[fluffy_target.x()][fluffy_target.y()] = Fluffy;
+        }
+        _ => {
+            *fluffy_dir = fluffy_dir.next();
+        }
     }
     let spiky_target = spiky_coords.0
-        + Coords((player_coords.0.0 - spiky_coords.0.0).signum(),
-        (player_coords.0.1 - spiky_coords.0.1).signum());
-    let is_empty = spiky_target.is_valid()
-        && board[spiky_target.x()][spiky_target.y()] == Empty;
-    if is_empty {
-        changes.push(Change::Move(spiky_coords.0, spiky_target));
-        board[spiky_coords.x()][spiky_coords.y()] = Empty;
-        spiky_coords.0 = spiky_target;
-        board[spiky_target.x()][spiky_target.y()] = Spiky;
+        + Coords(
+            ((player_coords.0).0 - (spiky_coords.0).0).signum(),
+            ((player_coords.0).1 - (spiky_coords.0).1).signum(),
+        );
+    match if spiky_target.is_valid() {
+        board[spiky_target.x()][spiky_target.y()]
+    } else {
+        Invisible
+    } {
+        Fluffy => {
+            *status = Status::Win(6);
+            changes.push(Change::Remove(**spiky_coords));
+            changes.push(Change::Remove(**fluffy_coords));
+            changes.push(Change::Add(Heart, spiky_target));
+            return;
+        }
+        Player => {
+            *status = Status::Dead(6);
+            changes.push(Change::Remove(**player_coords));
+            changes.push(Change::Add(Dead, **player_coords));
+            lives.0 -= 1;
+            return;
+        }
+        Empty => {
+            changes.push(Change::Move(spiky_coords.0, spiky_target));
+            board[spiky_coords.x()][spiky_coords.y()] = Empty;
+            spiky_coords.0 = spiky_target;
+            board[spiky_target.x()][spiky_target.y()] = Spiky;
+        }
+        _ => {}
     }
 }
 
-fn move_tiles(mut commands: Commands, sprite_handles: Res<SpriteHandles>, mut entity_board: ResMut<EntityBoard>, mut changes: ResMut<Changes>, query: Query<&mut Transform>) {
+fn move_tiles(
+    mut commands: Commands,
+    sprite_handles: Res<SpriteHandles>,
+    mut entity_board: ResMut<EntityBoard>,
+    mut changes: ResMut<Changes>, // TODO: Use events or ChangedRes for this
+    query: Query<&mut Transform>,
+) {
     for change in changes.iter() {
         match change {
             Change::Add(tile, coords) => {
@@ -481,22 +591,23 @@ fn move_tiles(mut commands: Commands, sprite_handles: Res<SpriteHandles>, mut en
                 let entity = commands
                     .spawn(SpriteSheetComponents {
                         sprite: TextureAtlasSprite::new(
-                                    sprite_handles.sprite_indices[sprite_idx as usize],
-                                ),
-                                texture_atlas: sprite_handles.atlas_handle,
-                                transform: Transform::from_translation(coords.into()),
-                                ..Default::default()
+                            sprite_handles.sprite_indices[sprite_idx as usize],
+                        ),
+                        texture_atlas: sprite_handles.atlas_handle,
+                        transform: Transform::from_translation(coords.into()),
+                        ..Default::default()
                     })
-                .current_entity().unwrap();
+                    .current_entity()
+                    .unwrap();
                 entity_board[coords.x()][coords.y()] = Some(entity);
-            },
+            }
             Change::Move(from, to) => {
                 let entity = entity_board[from.x()][from.y()].take().unwrap();
                 // TODO: verify that destination is empty
                 entity_board[to.x()][to.y()] = Some(entity);
                 let transform: &mut Transform = &mut query.get_mut(entity).unwrap();
                 transform.set_translation(to.into());
-            },
+            }
             Change::Remove(at) => {
                 let entity = entity_board[at.x()][at.y()].take().unwrap();
                 commands.despawn(entity);
@@ -506,12 +617,21 @@ fn move_tiles(mut commands: Commands, sprite_handles: Res<SpriteHandles>, mut en
     changes.clear();
 }
 
-fn user_input(keyboard_input: Res<Input<KeyCode>>, mut status: ResMut<Status>, mut player_coords: ResMut<PlayerCoords>, mut board: ResMut<Board>, mut changes: ResMut<Changes>) {
-    let mut dir =Coords::default();
+fn user_input(
+    keyboard_input: Res<Input<KeyCode>>,
+    mut status: ResMut<Status>,
+    mut player_coords: ResMut<PlayerCoords>,
+    mut board: ResMut<Board>,
+    mut changes: ResMut<Changes>,
+    mut lives: ResMut<Lives>,
+) {
+    let mut dir = Coords::default();
     if keyboard_input.just_pressed(KeyCode::P) {
         match *status {
-            Status::Pause => {*status = Status::Play }
-            Status::Play => { *status = Status::Pause; }
+            Status::Pause => *status = Status::Play,
+            Status::Play => {
+                *status = Status::Pause;
+            }
             _ => {}
         }
     }
@@ -540,14 +660,21 @@ fn user_input(keyboard_input: Res<Input<KeyCode>>, mut status: ResMut<Status>, m
                     board[target.x()][target.y()] = Player;
                     changes.push(Change::Move(player_coords.0, target));
                     player_coords.0 = target;
-                },
+                }
                 Gate => {
                     board[player_coords.x()][player_coords.y()] = Empty;
                     board[target.x()][target.y()] = Player;
                     changes.push(Change::Remove(target));
                     changes.push(Change::Move(player_coords.0, target));
                     player_coords.0 = target;
-                },
+                }
+                Spiky | Fluffy => {
+                    *status = Status::Dead(6);
+                    changes.push(Change::Remove(**player_coords));
+                    changes.push(Change::Add(Dead, **player_coords));
+                    lives.0 -= 1;
+                    return;
+                }
                 Disk => {
                     let disk_target = target + dir;
                     if disk_target.is_valid() && board[disk_target.x()][disk_target.y()] == Empty {
@@ -558,8 +685,9 @@ fn user_input(keyboard_input: Res<Input<KeyCode>>, mut status: ResMut<Status>, m
                         changes.push(Change::Move(player_coords.0, target));
                         player_coords.0 = target;
                     }
-                },
-                _ => {}}
+                }
+                _ => {}
+            }
         }
     }
 }

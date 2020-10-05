@@ -25,6 +25,6 @@ too.
 
 ## Original author
 
-Budge is Copyright (c) 1994, Nat Pryce (<budge@natpryce.com>)
+Budge is © 1994, Nat Pryce (<budge@natpryce.com>). See the LICENSE file for licensing information.
 
-See the LICENSE file for licensing information.
+The [Xolonium font](https://fontlibrary.org/en/font/xolonium) is © 2012-2016 Severin Meyer and is licensed under the [SIL Open Font License](https://scripts.sil.org/OFL).

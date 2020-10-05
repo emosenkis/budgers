@@ -1,10 +1,9 @@
 use self::FluffyDir::*;
 use self::Tile::*;
-use bevy::app::DefaultTaskPoolOptions;
-use bevy::asset::{HandleId, LoadState};
 use bevy::input::{keyboard::KeyCode, Input};
 use bevy::prelude::*;
 use bevy::sprite::TextureAtlasBuilder;
+use bevy::window::WindowResized;
 use shrinkwraprs::Shrinkwrap;
 use std::io::{BufRead, BufReader};
 use std::ops::{Add, AddAssign};
@@ -15,6 +14,85 @@ const TILE_SIZE: u32 = 24;
 const TILES_X: u32 = 20;
 const TILES_Y: u32 = 15;
 const LEVELS: &'static [u8] = include_bytes!("../levels");
+
+const SPRITES: [(&str, &[u8]); 28] = [
+    (
+        "assets/block_dl.png",
+        include_bytes!("../assets/block_dl.png"),
+    ),
+    (
+        "assets/block_dlr.png",
+        include_bytes!("../assets/block_dlr.png"),
+    ),
+    (
+        "assets/block_d.png",
+        include_bytes!("../assets/block_d.png"),
+    ),
+    (
+        "assets/block_dr.png",
+        include_bytes!("../assets/block_dr.png"),
+    ),
+    (
+        "assets/block_l.png",
+        include_bytes!("../assets/block_l.png"),
+    ),
+    (
+        "assets/block_lr.png",
+        include_bytes!("../assets/block_lr.png"),
+    ),
+    ("assets/block.png", include_bytes!("../assets/block.png")),
+    (
+        "assets/block_r.png",
+        include_bytes!("../assets/block_r.png"),
+    ),
+    (
+        "assets/block_udl.png",
+        include_bytes!("../assets/block_udl.png"),
+    ),
+    (
+        "assets/block_udlr.png",
+        include_bytes!("../assets/block_udlr.png"),
+    ),
+    (
+        "assets/block_ud.png",
+        include_bytes!("../assets/block_ud.png"),
+    ),
+    (
+        "assets/block_udr.png",
+        include_bytes!("../assets/block_udr.png"),
+    ),
+    (
+        "assets/block_ul.png",
+        include_bytes!("../assets/block_ul.png"),
+    ),
+    (
+        "assets/block_ulr.png",
+        include_bytes!("../assets/block_ulr.png"),
+    ),
+    (
+        "assets/block_u.png",
+        include_bytes!("../assets/block_u.png"),
+    ),
+    (
+        "assets/block_ur.png",
+        include_bytes!("../assets/block_ur.png"),
+    ),
+    ("assets/dead.png", include_bytes!("../assets/dead.png")),
+    ("assets/disk.png", include_bytes!("../assets/disk.png")),
+    ("assets/empty.png", include_bytes!("../assets/empty.png")),
+    ("assets/fluffy.png", include_bytes!("../assets/fluffy.png")),
+    ("assets/freeze.png", include_bytes!("../assets/freeze.png")),
+    ("assets/gate.png", include_bytes!("../assets/gate.png")),
+    ("assets/heart.png", include_bytes!("../assets/heart.png")),
+    ("assets/icon.png", include_bytes!("../assets/icon.png")),
+    (
+        "assets/invisible.png",
+        include_bytes!("../assets/invisible.png"),
+    ),
+    ("assets/killer.png", include_bytes!("../assets/killer.png")),
+    ("assets/player.png", include_bytes!("../assets/player.png")),
+    ("assets/spiky.png", include_bytes!("../assets/spiky.png")),
+];
 
 #[derive(Default, Eq, PartialEq, Clone, Copy, Debug)]
 struct Coords(i8, i8);
@@ -94,8 +172,7 @@ fn main() {
         .add_resource(WindowDescriptor {
             width: TILES_X * TILE_SIZE,
             height: TILES_Y * TILE_SIZE,
-            resizable: false,
-            title: "Budge".into(),
+            title: "Budgers".into(),
             ..Default::default()
         })
         .add_resource(DefaultTaskPoolOptions::with_num_threads(1))
@@ -108,20 +185,23 @@ fn main() {
         .init_resource::<Status>()
         .init_resource::<FluffyDir>()
         .init_resource::<Changes>()
+        .init_resource::<Events<WindowResized>>()
+        .init_resource::<EventReader<WindowResized>>()
         .add_default_plugins()
         .add_resource(TickTimer(Timer::from_seconds(0.25, true)))
-        .add_resource(Status::Win(0))
         .init_resource::<LevelNum>()
         .init_resource::<Lives>()
         .init_resource::<SpriteHandles>()
+        .init_resource::<UiHandles>()
         .add_startup_system(setup.system())
-        .add_system(load_atlas.system())
+        .add_system(draw_ui.system())
         .add_system(time_system.system())
         .add_system(move_monsters.system())
         .add_system(move_tiles.system())
         .add_system(start_level.system())
         .add_system(user_input.system())
         .add_system(reduce_timers.system())
+        .add_system(window_resized.system())
         .run();
 }
 
@@ -213,7 +293,7 @@ impl Tile {
 
     fn sprite(&self) -> Option<String> {
         Some(format!(
-            "sprites/{}.png",
+            "assets/{}.png",
             match *self {
                 Empty | Invisible => {
                     return None;
@@ -309,86 +389,150 @@ impl Neighbors {
 
 #[derive(Default)]
 pub struct SpriteHandles {
-    handles: Vec<HandleId>,
-    atlas_loaded: bool,
     atlas_handle: Handle<TextureAtlas>,
     sprite_indices: [u32; TILE_SPRITE_COUNT],
 }
 
-fn setup(
-    mut commands: Commands,
-    mut sprite_handles: ResMut<SpriteHandles>,
-    asset_server: Res<AssetServer>,
-) {
-    sprite_handles.handles = asset_server.load_asset_folder("sprites").unwrap();
-    commands.spawn(Camera2dComponents::default());
+struct UiHandles {
+    board: Entity,
 }
 
-fn load_atlas(
-    mut sprite_handles: ResMut<SpriteHandles>,
-    asset_server: Res<AssetServer>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-    mut textures: ResMut<Assets<Texture>>,
-) {
-    if sprite_handles.atlas_loaded {
-        return;
+impl Default for UiHandles {
+    fn default() -> Self {
+        Self {
+            board: Entity::new(0),
+        }
     }
+}
+
+fn setup(
+    mut commands: Commands,
+    mut textures: ResMut<Assets<Texture>>,
+    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    mut sprite_handles: ResMut<SpriteHandles>,
+    mut ui_handles: ResMut<UiHandles>,
+    mut fonts: ResMut<Assets<Font>>,
+    asset_server: Res<AssetServer>,
+) {
+    commands.spawn(Camera2dComponents::default());
+    commands.spawn(UiCameraComponents::default());
     let mut texture_atlas_builder =
         TextureAtlasBuilder::new(Vec2::new(144.0, 144.0), Vec2::new(144.0, 144.0));
-    if let Some(LoadState::Loaded(_)) = asset_server.get_group_load_state(&sprite_handles.handles) {
-        for texture_id in sprite_handles.handles.iter() {
-            let handle = Handle::from_id(*texture_id);
+    for tile in Tile::all() {
+        if let Some(path) = tile.sprite() {
+            let bytes = SPRITES
+                .iter()
+                .filter_map(|(ref bytes_path, bytes)| {
+                    if &path == bytes_path {
+                        Some(bytes)
+                    } else {
+                        None
+                    }
+                })
+                .cloned()
+                .next()
+                .unwrap();
+            let handle = asset_server
+                .load_inline(&mut textures, path, bytes.into())
+                .unwrap();
             let texture = textures.get(&handle).unwrap();
             texture_atlas_builder.add_texture(handle, &texture);
         }
-        let texture_atlas = texture_atlas_builder.finish(&mut textures).unwrap();
-
-        for tile in Tile::all() {
-            if let Some(idx) = tile.sprite_idx() {
-                let idx = idx as usize;
-                let filename = tile.sprite().unwrap();
-                sprite_handles.sprite_indices[idx] = texture_atlas
-                    .get_texture_index(asset_server.get_handle(&filename).unwrap())
-                    .unwrap() as u32;
-            }
-        }
-        sprite_handles.atlas_handle = texture_atlases.add(texture_atlas);
-        sprite_handles.atlas_loaded = true;
     }
+    let texture_atlas = texture_atlas_builder.finish(&mut textures).unwrap();
+
+    for tile in Tile::all() {
+        if let Some(idx) = tile.sprite_idx() {
+            let idx = idx as usize;
+            let filename = tile.sprite().unwrap();
+            sprite_handles.sprite_indices[idx] = texture_atlas
+                .get_texture_index(asset_server.get_handle(&filename).unwrap())
+                .unwrap() as u32;
+        }
+    }
+    sprite_handles.atlas_handle = texture_atlases.add(texture_atlas);
+
+    let font = asset_server
+        .load_inline(
+            &mut fonts,
+            "font.ttf",
+            include_bytes!("../assets/Xolonium-Regular.ttf")
+                .as_ref()
+                .into(),
+        )
+        .unwrap();
+
+    ui_handles.board = commands
+        .spawn(NodeComponents {
+            style: Style {
+                size: Size::new(
+                    Val::Px((TILE_SIZE * TILES_X) as f32),
+                    Val::Px((TILE_SIZE * TILES_Y) as f32),
+                ),
+                position_type: PositionType::Absolute,
+                ..Default::default()
+            },
+            draw: Draw {
+                is_visible: false,
+                ..Default::default()
+            },
+            ..Default::default()
+        })
+        .with(Container::Board)
+        .current_entity()
+        .unwrap();
+    commands
+        .spawn(NodeComponents {
+            style: Style {
+                flex_direction: FlexDirection::ColumnReverse,
+                align_items: AlignItems::Center,
+                position_type: PositionType::Absolute,
+                size: Size::new(Val::Percent(100.0), Val::Percent(100.0)),
+                ..Default::default()
+            },
+            transform: Transform::from_scale(2.0),
+            ..Default::default()
+        })
+        .with(Container::Welcome)
+        .with_children(|children| {
+            children.spawn(TextComponents {
+                text: Text {
+                    value: "Budgers".into(),
+                    font: font,
+                    style: TextStyle {
+                        font_size: 32.0,
+                        color: Color::BLACK,
+                    },
+                },
+                ..Default::default()
+            });
+        });
+}
+
+#[derive(Eq, PartialEq, Copy, Clone, Debug)]
+enum Container {
+    Welcome,
+    Board,
 }
 
 fn start_level(
     mut commands: Commands,
-    llsf: (
-        ResMut<LevelNum>,
-        Res<Lives>,
-        ResMut<Status>,
-        ResMut<FluffyDir>,
-    ),
+    cur_level: Res<LevelNum>,
+    mut status: ResMut<Status>,
+    mut fluffy_dir: ResMut<FluffyDir>,
     mut window: ResMut<Windows>,
     mut board: ResMut<Board>,
     mut entity_board: ResMut<EntityBoard>,
     mut changes: ResMut<Changes>,
-    mut player_coords: ResMut<PlayerCoords>,
-    mut spiky_coords: ResMut<SpikyCoords>,
-    mut fluffy_coords: ResMut<FluffyCoords>,
-    sprite_handles: Res<SpriteHandles>,
+    coords: (
+        ResMut<PlayerCoords>,
+        ResMut<SpikyCoords>,
+        ResMut<FluffyCoords>,
+    ),
 ) {
-    if !sprite_handles.atlas_loaded {
+    let (mut player_coords, mut spiky_coords, mut fluffy_coords) = coords;
+    if *status != Status::SetupLevel {
         return;
-    }
-    let (mut cur_level, lives, mut status, mut fluffy_dir) = llsf;
-    match *status {
-        Status::Win(0) => {}
-        Status::Dead(0) => {
-            if lives.0 == 0 {
-                return;
-            }
-            cur_level.0 -= 1;
-        }
-        _ => {
-            return;
-        }
     }
     *fluffy_dir = Default::default();
     let data_reader = BufReader::new(LEVELS);
@@ -443,13 +587,13 @@ fn start_level(
             }
         }
     }
-    cur_level.0 += 1;
     *status = Status::Play;
 }
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Status {
     Welcome,
+    SetupLevel,
     Win(u8),
     Play,
     Pause,
@@ -479,23 +623,49 @@ fn time_system(time: Res<Time>, mut timer: ResMut<TickTimer>) {
     timer.0.tick(time.delta_seconds);
 }
 
-fn reduce_timers(tick: Res<TickTimer>, mut status: ResMut<Status>, lives: Res<Lives>) {
+fn reduce_timers(
+    tick: Res<TickTimer>,
+    mut status: ResMut<Status>,
+    lives: Res<Lives>,
+    mut level: ResMut<LevelNum>,
+) {
     if !tick.finished {
         return;
     }
     match *status {
+        Status::Win(0) => {
+            level.0 += 1;
+            *status = Status::SetupLevel;
+        }
         Status::Win(ref mut n) => {
             *n -= 1;
         }
         Status::Dead(0) => {
             if lives.0 == 0 {
                 *status = Status::Welcome;
+            } else {
+                *status = Status::SetupLevel;
             }
         }
         Status::Dead(ref mut n) => {
             *n -= 1;
         }
         _ => {}
+    }
+}
+
+fn draw_ui(status: Res<Status>, container: &Container, mut draw: Mut<Draw>) {
+    let visible_container = match *status {
+        Status::Welcome => Container::Welcome,
+        _ => Container::Board,
+    };
+    let should_be_visible = *container == visible_container;
+    if draw.is_visible != should_be_visible {
+        println!(
+            "Setting {:?} visibility from {} to {}",
+            container, draw.is_visible, should_be_visible
+        );
+        draw.is_visible = should_be_visible;
     }
 }
 
@@ -579,11 +749,19 @@ fn move_monsters(
 
 fn move_tiles(
     mut commands: Commands,
+    status: Res<Status>,
     sprite_handles: Res<SpriteHandles>,
     mut entity_board: ResMut<EntityBoard>,
     mut changes: ResMut<Changes>, // TODO: Use events or ChangedRes for this
+    ui_handles: Res<UiHandles>,
     query: Query<&mut Transform>,
 ) {
+    match *status {
+        Status::Welcome | Status::SetupLevel => {
+            return;
+        }
+        _ => {}
+    }
     for change in changes.iter() {
         match change {
             Change::Add(tile, coords) => {
@@ -597,6 +775,7 @@ fn move_tiles(
                         transform: Transform::from_translation(coords.into()),
                         ..Default::default()
                     })
+                    .with(Parent(ui_handles.board))
                     .current_entity()
                     .unwrap();
                 entity_board[coords.x()][coords.y()] = Some(entity);
@@ -617,6 +796,20 @@ fn move_tiles(
     changes.clear();
 }
 
+fn window_resized(
+    events: Res<Events<WindowResized>>,
+    mut event_reader: ResMut<EventReader<WindowResized>>,
+    mut container_query: Query<(&Container, &mut Transform)>,
+) {
+    if let Some(event) = event_reader.latest(&events) {
+        let scale = (event.width as f32 / (TILES_X * TILE_SIZE) as f32)
+            .min(event.height as f32 / (TILES_Y * TILE_SIZE) as f32);
+        for (_, mut transform) in container_query.iter().iter() {
+            transform.set_scale(scale);
+        }
+    }
+}
+
 fn user_input(
     keyboard_input: Res<Input<KeyCode>>,
     mut status: ResMut<Status>,
@@ -624,8 +817,8 @@ fn user_input(
     mut board: ResMut<Board>,
     mut changes: ResMut<Changes>,
     mut lives: ResMut<Lives>,
+    mut level: ResMut<LevelNum>,
 ) {
-    let mut dir = Coords::default();
     if keyboard_input.just_pressed(KeyCode::P) {
         match *status {
             Status::Pause => *status = Status::Play,
@@ -635,9 +828,15 @@ fn user_input(
             _ => {}
         }
     }
+    if *status == Status::Welcome && keyboard_input.just_pressed(KeyCode::Space) {
+        *lives = Lives::default();
+        *level = LevelNum::default();
+        *status = Status::SetupLevel;
+    }
     if *status != Status::Play {
         return;
     }
+    let mut dir = Coords::default();
     if keyboard_input.just_pressed(KeyCode::Left) {
         dir += Left;
     }

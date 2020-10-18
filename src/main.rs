@@ -542,8 +542,8 @@ fn start_level(
         .next()
         .unwrap()
         .unwrap();
-    let window_id = window.get_primary().unwrap().id;
-    window.get_mut(window_id).unwrap().title = name; // TODO: Fix this so it actually works
+    let window_id = window.get_primary().unwrap().id();
+    window.get_mut(window_id).unwrap().set_title(name);
     let data_reader = BufReader::new(LEVELS);
     *board = Default::default();
     for entity in entity_board
@@ -798,6 +798,7 @@ fn move_tiles(
 
 fn window_resized(
     events: Res<Events<WindowResized>>,
+    // mut window: ResMut<Windows>,
     mut event_reader: ResMut<EventReader<WindowResized>>,
     mut container_query: Query<(&Container, &mut Transform)>,
 ) {
@@ -807,6 +808,13 @@ fn window_resized(
         for (_, mut transform) in container_query.iter().iter() {
             transform.set_scale(scale);
         }
+        /* TODO: Debounce this so it doesn't crash the game
+        let window_id = window.get_primary().unwrap().id();
+        window.get_mut(window_id).unwrap().set_resolution(
+            scale as u32 * TILES_X * TILE_SIZE,
+            scale as u32 * TILES_Y * TILE_SIZE,
+        );
+        */
     }
 }
 

@@ -8,9 +8,9 @@ edition = "2018"
 strum = "0.19.2"
 strum_macros = "0.19.2"
 shrinkwraprs = "0.3.0"
+bevy_prototype_inline_assets = { git = "https://github.com/emosenkis/bevy_prototype_inline_assets", branch = "main" }
 
 [dependencies.bevy]
-git = "https://github.com/emosenkis/bevy"
-rev = "8c3f5c3758e9b3a4c9fd23472f9917dd9f0aa5da"
+git = "https://github.com/bevyengine/bevy"
 default_features = false
 features = ["bevy_winit", "bevy_wgpu", "render", "png", "x11"]

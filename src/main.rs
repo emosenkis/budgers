@@ -1,12 +1,16 @@
 use self::FluffyDir::*;
 use self::Tile::*;
+use bevy::asset::{AssetPlugin, LoadState};
 use bevy::input::{keyboard::KeyCode, Input};
 use bevy::prelude::*;
 use bevy::sprite::TextureAtlasBuilder;
 use bevy::window::WindowResized;
+use bevy_prototype_inline_assets::{inline_assets, InlineAssets, InlineAssetsPlugin};
 use shrinkwraprs::Shrinkwrap;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::ops::{Add, AddAssign};
+use std::path::Path;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -14,85 +18,6 @@ const TILE_SIZE: u32 = 24;
 const TILES_X: u32 = 20;
 const TILES_Y: u32 = 15;
 const LEVELS: &'static [u8] = include_bytes!("../levels");
-
-const SPRITES: [(&str, &[u8]); 28] = [
-    (
-        "assets/block_dl.png",
-        include_bytes!("../assets/block_dl.png"),
-    ),
-    (
-        "assets/block_dlr.png",
-        include_bytes!("../assets/block_dlr.png"),
-    ),
-    (
-        "assets/block_d.png",
-        include_bytes!("../assets/block_d.png"),
-    ),
-    (
-        "assets/block_dr.png",
-        include_bytes!("../assets/block_dr.png"),
-    ),
-    (
-        "assets/block_l.png",
-        include_bytes!("../assets/block_l.png"),
-    ),
-    (
-        "assets/block_lr.png",
-        include_bytes!("../assets/block_lr.png"),
-    ),
-    ("assets/block.png", include_bytes!("../assets/block.png")),
-    (
-        "assets/block_r.png",
-        include_bytes!("../assets/block_r.png"),
-    ),
-    (
-        "assets/block_udl.png",
-        include_bytes!("../assets/block_udl.png"),
-    ),
-    (
-        "assets/block_udlr.png",
-        include_bytes!("../assets/block_udlr.png"),
-    ),
-    (
-        "assets/block_ud.png",
-        include_bytes!("../assets/block_ud.png"),
-    ),
-    (
-        "assets/block_udr.png",
-        include_bytes!("../assets/block_udr.png"),
-    ),
-    (
-        "assets/block_ul.png",
-        include_bytes!("../assets/block_ul.png"),
-    ),
-    (
-        "assets/block_ulr.png",
-        include_bytes!("../assets/block_ulr.png"),
-    ),
-    (
-        "assets/block_u.png",
-        include_bytes!("../assets/block_u.png"),
-    ),
-    (
-        "assets/block_ur.png",
-        include_bytes!("../assets/block_ur.png"),
-    ),
-    ("assets/dead.png", include_bytes!("../assets/dead.png")),
-    ("assets/disk.png", include_bytes!("../assets/disk.png")),
-    ("assets/empty.png", include_bytes!("../assets/empty.png")),
-    ("assets/fluffy.png", include_bytes!("../assets/fluffy.png")),
-    ("assets/freeze.png", include_bytes!("../assets/freeze.png")),
-    ("assets/gate.png", include_bytes!("../assets/gate.png")),
-    ("assets/heart.png", include_bytes!("../assets/heart.png")),
-    ("assets/icon.png", include_bytes!("../assets/icon.png")),
-    (
-        "assets/invisible.png",
-        include_bytes!("../assets/invisible.png"),
-    ),
-    ("assets/killer.png", include_bytes!("../assets/killer.png")),
-    ("assets/player.png", include_bytes!("../assets/player.png")),
-    ("assets/spiky.png", include_bytes!("../assets/spiky.png")),
-];
 
 #[derive(Default, Eq, PartialEq, Clone, Copy, Debug)]
 struct Coords(i8, i8);
@@ -168,6 +93,37 @@ enum Change {
 type Changes = Vec<Change>;
 
 fn main() {
+    let inline_assets = inline_assets![
+        "assets/block_dl.png",
+        "assets/block_dlr.png",
+        "assets/block_d.png",
+        "assets/block_dr.png",
+        "assets/block_l.png",
+        "assets/block_lr.png",
+        "assets/block.png",
+        "assets/block_r.png",
+        "assets/block_udl.png",
+        "assets/block_udlr.png",
+        "assets/block_ud.png",
+        "assets/block_udr.png",
+        "assets/block_ul.png",
+        "assets/block_ulr.png",
+        "assets/block_u.png",
+        "assets/block_ur.png",
+        "assets/dead.png",
+        "assets/disk.png",
+        "assets/empty.png",
+        "assets/fluffy.png",
+        "assets/freeze.png",
+        "assets/gate.png",
+        "assets/heart.png",
+        "assets/icon.png",
+        "assets/invisible.png",
+        "assets/killer.png",
+        "assets/player.png",
+        "assets/spiky.png",
+        "assets/Xolonium-Regular.ttf",
+    ];
     App::build()
         .add_resource(WindowDescriptor {
             width: TILES_X * TILE_SIZE,
@@ -175,9 +131,11 @@ fn main() {
             title: "Budgers".into(),
             ..Default::default()
         })
+        .add_resource(inline_assets)
         .add_resource(DefaultTaskPoolOptions::with_num_threads(1))
         .add_resource(ClearColor(Color::WHITE))
         .init_resource::<Board>()
+        .init_resource::<HashMap<&'static Path, HandleUntyped>>()
         .init_resource::<EntityBoard>()
         .init_resource::<PlayerCoords>()
         .init_resource::<SpikyCoords>()
@@ -187,13 +145,16 @@ fn main() {
         .init_resource::<Changes>()
         .init_resource::<Events<WindowResized>>()
         .init_resource::<EventReader<WindowResized>>()
-        .add_default_plugins()
+        .add_plugin_group_with(DefaultPlugins, |group| {
+            group.add_after::<AssetPlugin, _>(InlineAssetsPlugin)
+        })
         .add_resource(TickTimer(Timer::from_seconds(0.25, true)))
         .init_resource::<LevelNum>()
         .init_resource::<Lives>()
         .init_resource::<SpriteHandles>()
         .init_resource::<UiHandles>()
         .add_startup_system(setup.system())
+        .add_system(load_assets_and_build_ui.system())
         .add_system(draw_ui.system())
         .add_system(time_system.system())
         .add_system(move_monsters.system())
@@ -407,36 +368,38 @@ impl Default for UiHandles {
 
 fn setup(
     mut commands: Commands,
-    mut textures: ResMut<Assets<Texture>>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-    mut sprite_handles: ResMut<SpriteHandles>,
-    mut ui_handles: ResMut<UiHandles>,
-    mut fonts: ResMut<Assets<Font>>,
+    inline_assets: Res<InlineAssets>,
     asset_server: Res<AssetServer>,
+    mut inline_asset_handles: ResMut<HashMap<&'static Path, HandleUntyped>>,
 ) {
+    *inline_asset_handles = inline_assets.load_all(asset_server);
     commands.spawn(Camera2dComponents::default());
     commands.spawn(UiCameraComponents::default());
+}
+
+fn load_assets_and_build_ui(
+    mut commands: Commands,
+    mut status: ResMut<Status>,
+    mut textures: ResMut<Assets<Texture>>,
+    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    inline_asset_handles: Res<HashMap<&'static Path, HandleUntyped>>,
+    mut sprite_handles: ResMut<SpriteHandles>,
+    mut ui_handles: ResMut<UiHandles>,
+    asset_server: Res<AssetServer>,
+) {
+    if *status != Status::Loading
+        || asset_server.get_group_load_state(inline_asset_handles.values().map(|h| h.id))
+            != LoadState::Loaded
+    {
+        return;
+    }
     let mut texture_atlas_builder =
         TextureAtlasBuilder::new(Vec2::new(144.0, 144.0), Vec2::new(144.0, 144.0));
     for tile in Tile::all() {
         if let Some(path) = tile.sprite() {
-            let bytes = SPRITES
-                .iter()
-                .filter_map(|(ref bytes_path, bytes)| {
-                    if &path == bytes_path {
-                        Some(bytes)
-                    } else {
-                        None
-                    }
-                })
-                .cloned()
-                .next()
-                .unwrap();
-            let handle = asset_server
-                .load_inline(&mut textures, path, bytes.into())
-                .unwrap();
-            let texture = textures.get(&handle).unwrap();
-            texture_atlas_builder.add_texture(handle, &texture);
+            let handle = inline_asset_handles.get(&Path::new(&path)).unwrap();
+            let texture = textures.get(handle.id).unwrap();
+            texture_atlas_builder.add_texture(handle.clone().typed::<Texture>(), &texture);
         }
     }
     let texture_atlas = texture_atlas_builder.finish(&mut textures).unwrap();
@@ -446,21 +409,23 @@ fn setup(
             let idx = idx as usize;
             let filename = tile.sprite().unwrap();
             sprite_handles.sprite_indices[idx] = texture_atlas
-                .get_texture_index(asset_server.get_handle(&filename).unwrap())
+                .get_texture_index(
+                    &inline_asset_handles
+                        .get(Path::new(&filename))
+                        .unwrap()
+                        .clone()
+                        .typed::<Texture>(),
+                )
                 .unwrap() as u32;
         }
     }
     sprite_handles.atlas_handle = texture_atlases.add(texture_atlas);
 
-    let font = asset_server
-        .load_inline(
-            &mut fonts,
-            "font.ttf",
-            include_bytes!("../assets/Xolonium-Regular.ttf")
-                .as_ref()
-                .into(),
-        )
-        .unwrap();
+    let font = inline_asset_handles
+        .get(Path::new("assets/Xolonium-Regular.ttf"))
+        .unwrap()
+        .clone()
+        .typed();
 
     ui_handles.board = commands
         .spawn(NodeComponents {
@@ -490,7 +455,7 @@ fn setup(
                 size: Size::new(Val::Percent(100.0), Val::Percent(100.0)),
                 ..Default::default()
             },
-            transform: Transform::from_scale(2.0),
+            transform: Transform::from_scale(Vec3::splat(2.0)),
             ..Default::default()
         })
         .with(Container::Welcome)
@@ -507,6 +472,7 @@ fn setup(
                 ..Default::default()
             });
         });
+    *status = Status::Welcome;
 }
 
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
@@ -592,6 +558,7 @@ fn start_level(
 
 #[derive(Eq, PartialEq, Copy, Clone)]
 enum Status {
+    Loading,
     Welcome,
     SetupLevel,
     Win(u8),
@@ -602,7 +569,7 @@ enum Status {
 
 impl Default for Status {
     fn default() -> Self {
-        Self::Welcome
+        Self::Loading
     }
 }
 
@@ -754,7 +721,7 @@ fn move_tiles(
     mut entity_board: ResMut<EntityBoard>,
     mut changes: ResMut<Changes>, // TODO: Use events or ChangedRes for this
     ui_handles: Res<UiHandles>,
-    query: Query<&mut Transform>,
+    mut query: Query<&mut Transform>,
 ) {
     match *status {
         Status::Welcome | Status::SetupLevel => {
@@ -771,7 +738,7 @@ fn move_tiles(
                         sprite: TextureAtlasSprite::new(
                             sprite_handles.sprite_indices[sprite_idx as usize],
                         ),
-                        texture_atlas: sprite_handles.atlas_handle,
+                        texture_atlas: sprite_handles.atlas_handle.clone(),
                         transform: Transform::from_translation(coords.into()),
                         ..Default::default()
                     })
@@ -785,7 +752,7 @@ fn move_tiles(
                 // TODO: verify that destination is empty
                 entity_board[to.x()][to.y()] = Some(entity);
                 let transform: &mut Transform = &mut query.get_mut(entity).unwrap();
-                transform.set_translation(to.into());
+                transform.translation = to.into();
             }
             Change::Remove(at) => {
                 let entity = entity_board[at.x()][at.y()].take().unwrap();
@@ -805,14 +772,14 @@ fn window_resized(
     if let Some(event) = event_reader.latest(&events) {
         let scale = (event.width as f32 / (TILES_X * TILE_SIZE) as f32)
             .min(event.height as f32 / (TILES_Y * TILE_SIZE) as f32);
-        for (_, mut transform) in container_query.iter().iter() {
-            transform.set_scale(scale);
+        for (_, mut transform) in container_query.iter_mut() {
+            transform.scale = Vec3::splat(scale);
         }
         /* TODO: Debounce this so it doesn't crash the game
         let window_id = window.get_primary().unwrap().id();
         window.get_mut(window_id).unwrap().set_resolution(
-            scale as u32 * TILES_X * TILE_SIZE,
-            scale as u32 * TILES_Y * TILE_SIZE,
+        scale as u32 * TILES_X * TILE_SIZE,
+        scale as u32 * TILES_Y * TILE_SIZE,
         );
         */
     }

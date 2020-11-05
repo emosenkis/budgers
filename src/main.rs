@@ -145,7 +145,7 @@ fn main() {
         .init_resource::<Changes>()
         .init_resource::<Events<WindowResized>>()
         .init_resource::<EventReader<WindowResized>>()
-        .add_plugin_group_with(DefaultPlugins, |group| {
+        .add_plugins_with(DefaultPlugins, |group| {
             group.add_after::<AssetPlugin, _>(InlineAssetsPlugin)
         })
         .add_resource(TickTimer(Timer::from_seconds(0.25, true)))
